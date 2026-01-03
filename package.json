@@ -4,7 +4,7 @@
   "description": "E2E Test Automation Framework for SauceDemo using Playwright + JavaScript with POM",
   "main": "index.js",
   "scripts": {
-    "test-headed": "playwright test --headed --workers=1",
+    "test-headed": "playwright test --headed --workers=2",
     "test-non-headed": "playwright test",
     "test-slow": "playwright test --config=playwright.config.ts",
     "test:chrome": "playwright test --project=chromium",
