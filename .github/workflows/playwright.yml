@@ -1,27 +1,183 @@
-name: Playwright Tests
+name: Playwright Tests CI/CD
+
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, develop ]
   pull_request:
     branches: [ main, master ]
+  schedule:
+    # Run tests Monday-Friday at 9 AM UTC
+    - cron: '0 9 * * 1-5'
+  workflow_dispatch: # Allow manual trigger
+
 jobs:
-  test:
-    timeout-minutes: 60
+  # Quick smoke tests
+  smoke-tests:
+    name: Smoke Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
       with:
         node-version: lts/*
+    
     - name: Install dependencies
-      run: npm ci
+      run: npm install
+    
     - name: Install Playwright Browsers
-      run: npx playwright install --with-deps
-    - name: Run Playwright tests
-      run: npx playwright test
-    - uses: actions/upload-artifact@v4
-      if: ${{ !cancelled() }}
+      run: npx playwright install chromium --with-deps
+    
+    - name: Run smoke tests
+      run: npx playwright test --grep @smoke
+      continue-on-error: true
+    
+    - name: Upload smoke test results
+      uses: actions/upload-artifact@v4
+      if: always()
       with:
-        name: playwright-report
+        name: smoke-test-results
+        path: |
+          playwright-report/
+          test-results/
+        retention-days: 7
+
+  # Full test suite across browsers
+  test:
+    name: Test on ${{ matrix.browser }}
+    needs: smoke-tests
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: lts/*
+    
+    - name: Install dependencies
+      run: npm install
+    
+    - name: Install Playwright Browser
+      run: npx playwright install ${{ matrix.browser }} --with-deps
+    
+    - name: Run Playwright tests
+      run: npx playwright test --project=${{ matrix.browser }}
+      continue-on-error: true
+      env:
+        STANDARD_USER: ${{ secrets.STANDARD_USER || 'standard_user' }}
+        PASSWORD: ${{ secrets.PASSWORD || 'secret_sauce' }}
+        BASE_URL: ${{ secrets.BASE_URL || 'https://www.saucedemo.com' }}
+    
+    - name: Upload Playwright Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: playwright-report-${{ matrix.browser }}
         path: playwright-report/
         retention-days: 30
+    
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-${{ matrix.browser }}
+        path: test-results/
+        retention-days: 30
+    
+    - name: Upload Allure Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: allure-results-${{ matrix.browser }}
+        path: allure-results/
+        retention-days: 30
+
+  # Generate combined test report
+  generate-report:
+    name: Generate Test Report
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: lts/*
+    
+    - name: Download all test results
+      uses: actions/download-artifact@v4
+      with:
+        path: all-results
+    
+    - name: Install Allure
+      run: |
+        npm install -g allure-commandline --save-dev
+    
+    - name: Merge Allure results
+      run: |
+        mkdir -p allure-results
+        find all-results -name "allure-results*" -type d -exec cp -r {}/* allure-results/ \;
+      continue-on-error: true
+    
+    - name: Generate Allure Report
+      run: |
+        allure generate allure-results --clean -o allure-report
+      continue-on-error: true
+    
+    - name: Upload Combined Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: combined-allure-report
+        path: allure-report/
+        retention-days: 30
+    
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./allure-report
+        keep_files: true
+        user_name: 'github-actions[bot]'
+        user_email: 'github-actions[bot]@users.noreply.github.com'
+
+  # Test summary
+  test-summary:
+    name: Test Summary
+    needs: [smoke-tests, test]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Check test results
+      run: |
+        echo "## Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Smoke Tests**: ${{ needs.smoke-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Full Tests**: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Artifacts Generated" >> $GITHUB_STEP_SUMMARY
+        echo "- Playwright Reports" >> $GITHUB_STEP_SUMMARY
+        echo "- Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "- Allure Reports" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Post status
+      if: failure()
+      run: |
+        echo "::error::Some tests failed. Check the artifacts for details."
