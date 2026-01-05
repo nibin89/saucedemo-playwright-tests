@@ -2,7 +2,7 @@ const { test, expect } = require('@playwright/test');
 const LoginPage = require('../Pages/LoginPage');
 const InventoryPage = require('../Pages/InventoryPage');
 const CartPage = require('../Pages/Cartpage');
-const CheckoutPage = require('../pages/CheckoutPage');
+const CheckoutPage = require('../Pages/CheckoutPage');
 const TestData = require('../utils/testData');
 
 test.describe('Checkout Process Tests', () => {
